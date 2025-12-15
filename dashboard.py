@@ -3,10 +3,14 @@ import pandas as pd
 import json
 from sqlalchemy import create_engine
 import plotly.express as px
-from datetime import timedelta
+from datetime import timedelta, datetime
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+import io
 
 # =========================================================
-# PAGE CONFIG (IMPORTANT FOR STREAMLIT CLOUD)
+# PAGE CONFIG
 # =========================================================
 st.set_page_config(
     page_title="API Command Center",
@@ -18,18 +22,16 @@ st.title("⚡ API Command Center")
 st.caption("Executive monitoring of CPL API health, SLA & business impact")
 
 # =========================================================
-# PREMIUM UI CSS
+# CSS
 # =========================================================
 st.markdown("""
 <style>
-/* -------- API CARDS -------- */
 .api-card {
     background: linear-gradient(145deg, #1c1c1c, #111);
     border: 1px solid #2a2a2a;
     border-radius: 14px;
     padding: 18px;
     margin-bottom: 18px;
-    box-shadow: 0 6px 18px rgba(0,0,0,.35);
 }
 .api-header {
     display: flex;
@@ -37,19 +39,9 @@ st.markdown("""
     font-size: 13px;
     color: #aaa;
 }
-.api-title {
-    font-weight: 600;
-    text-transform: uppercase;
-}
-.api-metric {
-    font-size: 34px;
-    font-weight: 700;
-    color: white;
-}
-.api-sub {
-    font-size: 12px;
-    color: #888;
-}
+.api-title { font-weight: 600; text-transform: uppercase; }
+.api-metric { font-size: 34px; font-weight: 700; color: white; }
+.api-sub { font-size: 12px; color: #888; }
 .api-footer {
     display: flex;
     justify-content: space-between;
@@ -60,42 +52,28 @@ st.markdown("""
 .failure { color: #ff5c5c; }
 .rate { color: #5dade2; }
 
-/* -------- ALERTS -------- */
 .alert-box {
     background-color: #fff5f5;
     border-left: 6px solid #ff4d4f;
     padding: 12px 16px;
     border-radius: 6px;
     margin-bottom: 10px;
-    color: #333;
 }
 .alert-box b { color: #b71c1c; }
-.alert-rate { font-size: 13px; color: #555; }
 </style>
 """, unsafe_allow_html=True)
 
 # =========================================================
-# DATABASE LOADER (CLOUD SAFE)
+# DB LOAD (CLOUD SAFE)
 # =========================================================
 @st.cache_data(ttl=120)
 def load_data():
     try:
-        host = st.secrets.get("DB_HOST")
-        port = st.secrets.get("DB_PORT", "3306")
-        user = st.secrets.get("DB_USER")
-        pwd = st.secrets.get("DB_PASS")
-        db = st.secrets.get("DB_NAME")
-    except Exception:
-        return pd.DataFrame()
-
-    if not all([host, user, pwd, db]):
-        return pd.DataFrame()
-
-    try:
         engine = create_engine(
-            f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}",
-            pool_pre_ping=True,
-            connect_args={"connect_timeout": 5}
+            f"mysql+pymysql://{st.secrets['DB_USER']}:{st.secrets['DB_PASS']}@"
+            f"{st.secrets['DB_HOST']}:{st.secrets.get('DB_PORT','3306')}/"
+            f"{st.secrets['DB_NAME']}",
+            pool_pre_ping=True
         )
         df = pd.read_sql(
             "SELECT * FROM cpl_api_logs ORDER BY createdAt DESC LIMIT 50000",
@@ -107,66 +85,90 @@ def load_data():
         return pd.DataFrame()
 
 # =========================================================
-# STATUS & FAILURE PARSER
+# STATUS PARSER
 # =========================================================
 def enrich(df):
     def parse(row):
         try:
-            resp = row["response"]
-            resp = json.loads(resp) if isinstance(resp, str) else (resp or {})
-
+            resp = json.loads(row["response"]) if isinstance(row["response"], str) else {}
             if resp.get("status") is False:
-                return "Failure", str(resp.get("message", "Technical Error"))
-
+                return "Failure", str(resp.get("message", "Error"))
             if row["apiName"] == "mobileDetails" and not resp.get("data"):
                 return "No Data", "Customer Not Found"
-
-            if row["apiName"] == "vehicleDetails":
-                msg = resp.get("data", {}).get("data", {}).get("message")
-                if msg == "No Record Found":
-                    return "No Data", "Vehicle Not Found"
-
             return "Success", "-"
         except Exception:
-            return "Failure", "JSON Parse Error"
+            return "Failure", "Parse Error"
 
-    df[["Status", "Failure_Reason"]] = df.apply(
-        parse, axis=1, result_type="expand"
-    )
+    df[["Status", "Failure_Reason"]] = df.apply(parse, axis=1, result_type="expand")
     return df
 
 # =========================================================
 # LOAD DATA
 # =========================================================
-with st.spinner("Loading API telemetry..."):
-    df = load_data()
-
+df = load_data()
 if df.empty:
-    st.warning("⚠️ Data source unavailable or empty")
-    st.info("Dashboard is running. Waiting for data.")
+    st.warning("Waiting for data…")
     st.stop()
 
 df = enrich(df)
 
 # =========================================================
-# SIDEBAR CONTROLS
+# SIDEBAR — INTERACTIVE DATE FILTER
 # =========================================================
 with st.sidebar:
-    st.header("🎛 Controls")
-    period = st.radio("Time Window", ["Last 24 Hours", "Last 7 Days", "All Time"])
+    st.header("🗓️ Date Filter")
 
-    now = df["createdAt"].max()
-    start_time = {
-        "Last 24 Hours": now - timedelta(hours=24),
-        "Last 7 Days": now - timedelta(days=7),
-        "All Time": df["createdAt"].min()
-    }[period]
+    # Presets
+    preset = st.selectbox(
+        "Quick Range",
+        ["Last 24 Hours", "Last 7 Days", "Last 30 Days", "Custom Range"],
+        index=1
+    )
 
-    df = df[df["createdAt"] >= start_time]
-    st.caption(f"Records analyzed: {len(df):,}")
+    max_date = df["createdAt"].max().date()
+    min_date = df["createdAt"].min().date()
+
+    # Always render date_input (IMPORTANT)
+    date_range = st.date_input(
+        "Select Date Range",
+        value=(max_date - timedelta(days=7), max_date),
+        min_value=min_date,
+        max_value=max_date
+    )
+
+    # Resolve actual dates
+    if preset == "Last 24 Hours":
+        start_date = max_date - timedelta(days=1)
+        end_date = max_date
+
+    elif preset == "Last 7 Days":
+        start_date = max_date - timedelta(days=7)
+        end_date = max_date
+
+    elif preset == "Last 30 Days":
+        start_date = max_date - timedelta(days=30)
+        end_date = max_date
+
+    else:
+        # Custom Range
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date = min_date
+            end_date = max_date
+
+    st.caption(f"Showing data from {start_date} → {end_date}")
+
+    df = df[
+        (df["createdAt"].dt.date >= start_date) &
+        (df["createdAt"].dt.date <= end_date)
+    ]
+
+
+    st.caption(f"Records: {len(df):,}")
 
 # =========================================================
-# EXECUTIVE SUMMARY
+# EXEC SUMMARY
 # =========================================================
 total = len(df)
 success = (df["Status"] == "Success").sum()
@@ -182,152 +184,123 @@ c2.metric("Success Rate", f"{rate}%")
 c3.metric("Failures", failure)
 c4.metric("No Data", nodata)
 
-st.divider()
+# =========================================================
+# TABS
+# =========================================================
+tab_status, tab_alerts, tab_trends, tab_tech, tab_report = st.tabs(
+    ["⚡ Live Status", "🚨 Alerts", "📈 Trends", "🔧 Tech", "📄 Report"]
+)
 
 # =========================================================
-# TABS (RESTORED STRUCTURE)
-# =========================================================
-tab_status, tab_alerts, tab_trends, tab_tech, tab_report = st.tabs([
-    "⚡ Live Status",
-    "🚨 Alerts",
-    "📈 Trends & SLA",
-    "🔧 Tech Drilldown",
-    "📝 Report"
-])
-
-# =========================================================
-# TAB 1 — LIVE STATUS (COOL CARDS)
+# TAB 1 — STATUS CARDS
 # =========================================================
 with tab_status:
-    st.subheader("Live Status of All CPL Integrations")
-
-    summary = (
-        df.groupby("apiName")["Status"]
-        .value_counts()
-        .unstack(fill_value=0)
-    )
-
-    for col in ["Success", "Failure"]:
-        if col not in summary.columns:
-            summary[col] = 0
-
+    summary = df.groupby("apiName")["Status"].value_counts().unstack(fill_value=0)
     summary["Total"] = summary.sum(axis=1)
-    summary["Rate"] = (summary["Success"] / summary["Total"] * 100).round(1)
+    summary["Rate"] = (summary.get("Success", 0) / summary["Total"] * 100).round(1)
     summary = summary.sort_values("Rate")
-
-    def api_card(api, row):
-        icon = "🟢" if row["Rate"] >= 97 else "🟡" if row["Rate"] >= 90 else "🔴"
-        st.markdown(f"""
-        <div class="api-card">
-            <div class="api-header">
-                <span class="api-title">{api}</span>
-                <span>{icon}</span>
-            </div>
-            <div class="api-metric">{int(row["Total"])}</div>
-            <div class="api-sub">Requests</div>
-            <div class="api-footer">
-                <span class="success">{int(row["Success"])} Success</span>
-                <span class="failure">{int(row["Failure"])} Failed</span>
-            </div>
-            <div class="api-footer">
-                <span class="rate">{row["Rate"]}% Success Rate</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
 
     cols = st.columns(3)
     for i, (api, row) in enumerate(summary.iterrows()):
+        icon = "🟢" if row["Rate"] >= 97 else "🟡" if row["Rate"] >= 90 else "🔴"
         with cols[i % 3]:
-            api_card(api, row)
+            st.markdown(f"""
+            <div class="api-card">
+                <div class="api-header">
+                    <span class="api-title">{api}</span>
+                    <span>{icon}</span>
+                </div>
+                <div class="api-metric">{int(row["Total"])}</div>
+                <div class="api-sub">Requests</div>
+                <div class="api-footer">
+                    <span class="success">{int(row.get("Success",0))} Success</span>
+                    <span class="failure">{int(row.get("Failure",0))} Failed</span>
+                </div>
+                <div class="api-footer">
+                    <span class="rate">{row["Rate"]}% Success Rate</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
 # =========================================================
-# TAB 2 — ALERTS (READABLE)
+# TAB 2 — ALERTS
 # =========================================================
 with tab_alerts:
-    st.subheader("Active SLA Breaches")
-
-    sla = (
-        df.groupby("apiName")["Status"]
-        .apply(lambda x: (x == "Success").mean() * 100)
-    )
-
+    sla = df.groupby("apiName")["Status"].apply(lambda x: (x=="Success").mean()*100)
     breaches = sla[sla < 90]
 
     if breaches.empty:
-        st.success("All APIs are operating within SLA 🎉")
+        st.success("All APIs within SLA 🎉")
     else:
         for api, val in breaches.items():
             st.markdown(
-                f"""
-                <div class="alert-box">
-                    🚨 <b>{api}</b> is below SLA
-                    <div class="alert-rate">Success Rate: {val:.1f}%</div>
-                </div>
-                """,
+                f"<div class='alert-box'>🚨 <b>{api}</b> – {val:.1f}% success rate</div>",
                 unsafe_allow_html=True
             )
 
 # =========================================================
-# TAB 3 — TRENDS & SLA
+# TAB 3 — TRENDS
 # =========================================================
 with tab_trends:
-    st.subheader("Success Rate Trend")
-
     hourly = (
         df.set_index("createdAt")
         .resample("h")["Status"]
         .value_counts()
         .unstack(fill_value=0)
     )
+    hourly["Rate"] = hourly.get("Success",0) / hourly.sum(axis=1) * 100
 
-    hourly["Total"] = hourly.sum(axis=1)
-    hourly["Success Rate"] = hourly.get("Success", 0) / hourly["Total"] * 100
-
-    fig = px.line(hourly, y="Success Rate", markers=True)
-    fig.add_hline(y=95, line_dash="dot", annotation_text="Target SLA")
-    fig.update_layout(yaxis_range=[0, 105])
-
+    fig = px.line(hourly, y="Rate", title="Hourly Success Rate (%)")
+    fig.add_hline(y=95, line_dash="dot")
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================================================
-# TAB 4 — TECH DRILLDOWN
+# TAB 4 — TECH
 # =========================================================
 with tab_tech:
-    st.subheader("Top Failure Reasons")
-
-    failures = df[df["Status"] == "Failure"]
-
+    failures = df[df["Status"]=="Failure"]
     if failures.empty:
-        st.success("No failures detected 🎉")
+        st.success("No failures detected")
     else:
-        top = (
-            failures.groupby(["apiName", "Failure_Reason"])
+        st.dataframe(
+            failures.groupby(["apiName","Failure_Reason"])
             .size()
             .reset_index(name="Count")
             .sort_values("Count", ascending=False)
-            .head(15)
+            .head(15),
+            use_container_width=None
         )
-        st.dataframe(top, use_container_width=True)
 
 # =========================================================
-# TAB 5 — EXEC REPORT
+# TAB 5 — AUTO PDF REPORT
 # =========================================================
 with tab_report:
-    st.subheader("Executive Summary")
+    st.subheader("📄 Executive PDF Report")
 
-    report = f"""
-SYSTEM STATUS: {health}
-TIME WINDOW: {period}
+    def generate_pdf():
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        styles = getSampleStyleSheet()
+        content = []
 
-TOTAL REQUESTS: {total}
-SUCCESS RATE: {rate}%
-FAILURES: {failure}
-NO DATA CASES: {nodata}
+        content.append(Paragraph("<b>API Health Executive Report</b>", styles["Title"]))
+        content.append(Spacer(1, 12))
 
-ACTION POINTS:
-- Investigate APIs below SLA
-- Track recurring failure reasons
-- Monitor business impact of No Data cases
-"""
+        content.append(Paragraph(f"Period: {start_date} to {end_date}", styles["Normal"]))
+        content.append(Paragraph(f"System Health: {health}", styles["Normal"]))
+        content.append(Paragraph(f"Success Rate: {rate}%", styles["Normal"]))
+        content.append(Paragraph(f"Failures: {failure}", styles["Normal"]))
+        content.append(Paragraph(f"No Data: {nodata}", styles["Normal"]))
 
-    st.text_area("Weekly Summary", report, height=240)
+        doc.build(content)
+        buffer.seek(0)
+        return buffer
+
+    pdf = generate_pdf()
+
+    st.download_button(
+        "⬇️ Download Executive PDF",
+        data=pdf,
+        file_name="API_Executive_Report.pdf",
+        mime="application/pdf"
+    )
