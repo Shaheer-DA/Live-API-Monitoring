@@ -3,304 +3,407 @@ import pandas as pd
 import json
 from sqlalchemy import create_engine
 import plotly.express as px
-from datetime import timedelta, datetime
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from datetime import timedelta
+import streamlit.components.v1 as components
+from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.pagesizes import A4
 import io
 
-# =========================================================
+# =====================================================
 # PAGE CONFIG
-# =========================================================
+# =====================================================
 st.set_page_config(
     page_title="API Command Center",
     page_icon="⚡",
     layout="wide"
 )
 
-st.title("⚡ API Command Center")
-st.caption("Executive monitoring of CPL API health, SLA & business impact")
-
-# =========================================================
-# CSS
-# =========================================================
+# =====================================================
+# GLOBAL CSS (CARDS + METRICS + LAYOUT)
+# =====================================================
 st.markdown("""
 <style>
-.api-card {
-    background: linear-gradient(145deg, #1c1c1c, #111);
-    border: 1px solid #2a2a2a;
-    border-radius: 14px;
-    padding: 18px;
-    margin-bottom: 18px;
+/* Adjust main container spacing */
+.block-container { padding-top: 1.2rem; }
+
+/* --- METRIC HEADER STYLES --- */
+.metric-container {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 24px;
 }
-.api-header {
+
+.metric-box {
+    background: #0f0f0f;
+    border-radius: 12px;
+    padding: 20px;
+    flex: 1; /* Ensures equal width */
+    text-align: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    border: 1px solid #222;
+}
+
+.metric-label {
+    color: #888;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.metric-value {
+    font-size: 32px;
+    font-weight: 700;
+    color: white;
+}
+
+/* --- API CARD STYLES --- */
+.api-card {
+    background: #0f0f0f;
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 16px;
+    min-height: 220px; /* Allows card to expand for content */
+    box-shadow: 0 6px 18px rgba(0,0,0,.35);
+    position: relative;
+    display: flex;       /* Flexbox for layout */
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    position: absolute;
+    top: 20px;
+    right: 20px;
+}
+
+.green { background: #00c853; }
+.yellow { background: #f4b400; }
+.red { background: #ff5252; }
+
+.api-title {
+    color: #aaa;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.api-metric {
+    font-size: 38px;
+    font-weight: 700;
+    color: white;
+    line-height: 1;
+    margin-bottom: 2px;
+}
+
+.api-sub { 
+    color: #777; 
+    font-size: 12px; 
+    margin-bottom: 12px;
+}
+
+.stats-container {
+    margin-top: auto; /* Pushes stats to bottom */
+}
+
+.api-row {
     display: flex;
     justify-content: space-between;
     font-size: 13px;
-    color: #aaa;
+    margin-bottom: 6px;
 }
-.api-title { font-weight: 600; text-transform: uppercase; }
-.api-metric { font-size: 34px; font-weight: 700; color: white; }
-.api-sub { font-size: 12px; color: #888; }
-.api-footer {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
-    margin-top: 8px;
-}
-.success { color: #00d084; }
-.failure { color: #ff5c5c; }
-.rate { color: #5dade2; }
 
-.alert-box {
-    background-color: #fff5f5;
-    border-left: 6px solid #ff4d4f;
-    padding: 12px 16px;
+.success { color: #00e676; }
+.failure { color: #ff5252; }
+.nodata { color: #f4b400; }
+.rate { color: #64b5f6; }
+
+.tooltip {
+    font-size: 11px;
+    color: #888;
+    background: #1a1a1a;
+    padding: 6px 10px;
     border-radius: 6px;
-    margin-bottom: 10px;
+    margin-top: 8px;
+    text-align: center;
+    border: 1px solid #333;
 }
-.alert-box b { color: #b71c1c; }
 </style>
-""", unsafe_allow_html=True)
+""", unsafe_allow_html=True)      
 
-# =========================================================
-# DB LOAD (CLOUD SAFE)
-# =========================================================
+# =====================================================
+# LOAD DATA
+# =====================================================
 @st.cache_data(ttl=120)
 def load_data():
-    try:
-        engine = create_engine(
-            f"mysql+pymysql://{st.secrets['DB_USER']}:{st.secrets['DB_PASS']}@"
-            f"{st.secrets['DB_HOST']}:{st.secrets.get('DB_PORT','3306')}/"
-            f"{st.secrets['DB_NAME']}",
-            pool_pre_ping=True
-        )
-        df = pd.read_sql(
-            "SELECT * FROM cpl_api_logs ORDER BY createdAt DESC LIMIT 50000",
-            engine
-        )
-        df["createdAt"] = pd.to_datetime(df["createdAt"])
-        return df
-    except Exception:
-        return pd.DataFrame()
+    engine = create_engine(
+        f"mysql+pymysql://{st.secrets['DB_USER']}:{st.secrets['DB_PASS']}@"
+        f"{st.secrets['DB_HOST']}:{st.secrets.get('DB_PORT','3306')}/"
+        f"{st.secrets['DB_NAME']}",
+        pool_pre_ping=True
+    )
+    df = pd.read_sql(
+        "SELECT * FROM cpl_api_logs ORDER BY createdAt DESC LIMIT 50000",
+        engine
+    )
+    df["createdAt"] = pd.to_datetime(df["createdAt"])
+    return df
 
-# =========================================================
-# STATUS PARSER
-# =========================================================
 def enrich(df):
     def parse(row):
         try:
-            resp = json.loads(row["response"]) if isinstance(row["response"], str) else {}
-            if resp.get("status") is False:
-                return "Failure", str(resp.get("message", "Error"))
-            if row["apiName"] == "mobileDetails" and not resp.get("data"):
+            r = json.loads(row["response"]) if isinstance(row["response"], str) else {}
+            if r.get("status") is False:
+                return "Failure", str(r.get("message", "Technical Error"))
+
+            if row["apiName"] == "mobileDetails" and not r.get("data"):
                 return "No Data", "Customer Not Found"
+
+            if row["apiName"] == "vehicleDetails":
+                msg = r.get("data", {}).get("data", {}).get("message")
+                if msg == "No Record Found":
+                    return "No Data", "Vehicle Not Found"
+
             return "Success", "-"
-        except Exception:
+        except:
             return "Failure", "Parse Error"
 
     df[["Status", "Failure_Reason"]] = df.apply(parse, axis=1, result_type="expand")
     return df
 
-# =========================================================
-# LOAD DATA
-# =========================================================
-df = load_data()
-if df.empty:
-    st.warning("Waiting for data…")
-    st.stop()
+df = enrich(load_data())
 
-df = enrich(df)
-
-# =========================================================
-# SIDEBAR — INTERACTIVE DATE FILTER
-# =========================================================
+# =====================================================
+# SIDEBAR — DATE FILTER
+# =====================================================
 with st.sidebar:
-    st.header("🗓️ Date Filter")
+    st.header("🗓 Date Filter")
 
-    # Presets
     preset = st.selectbox(
-        "Quick Range",
-        ["Last 24 Hours", "Last 7 Days", "Last 30 Days", "Custom Range"],
+        "Range",
+        ["Last 24 Hours", "Last 7 Days", "Last 30 Days", "Custom"],
         index=1
     )
 
-    max_date = df["createdAt"].max().date()
-    min_date = df["createdAt"].min().date()
+    max_d = df["createdAt"].max().date()
+    min_d = df["createdAt"].min().date()
 
-    # Always render date_input (IMPORTANT)
-    date_range = st.date_input(
-        "Select Date Range",
-        value=(max_date - timedelta(days=7), max_date),
-        min_value=min_date,
-        max_value=max_date
+    custom = st.date_input(
+        "Custom Range",
+        value=(max_d - timedelta(days=7), max_d),
+        min_value=min_d,
+        max_value=max_d
     )
 
-    # Resolve actual dates
     if preset == "Last 24 Hours":
-        start_date = max_date - timedelta(days=1)
-        end_date = max_date
-
+        start, end = max_d - timedelta(days=1), max_d
     elif preset == "Last 7 Days":
-        start_date = max_date - timedelta(days=7)
-        end_date = max_date
-
+        start, end = max_d - timedelta(days=7), max_d
     elif preset == "Last 30 Days":
-        start_date = max_date - timedelta(days=30)
-        end_date = max_date
-
+        start, end = max_d - timedelta(days=30), max_d
     else:
-        # Custom Range
-        if isinstance(date_range, tuple) and len(date_range) == 2:
-            start_date, end_date = date_range
-        else:
-            start_date = min_date
-            end_date = max_date
-
-    st.caption(f"Showing data from {start_date} → {end_date}")
+        start, end = custom
 
     df = df[
-        (df["createdAt"].dt.date >= start_date) &
-        (df["createdAt"].dt.date <= end_date)
+        (df["createdAt"].dt.date >= start) &
+        (df["createdAt"].dt.date <= end)
     ]
 
-
-    st.caption(f"Records: {len(df):,}")
-
-# =========================================================
-# EXEC SUMMARY
-# =========================================================
+# =====================================================
+# EXEC SUMMARY (FIXED: HTML FLUSH LEFT)
+# =====================================================
 total = len(df)
 success = (df["Status"] == "Success").sum()
 failure = (df["Status"] == "Failure").sum()
 nodata = (df["Status"] == "No Data").sum()
 rate = round(success / total * 100, 1) if total else 0
 
-health = "🟢 HEALTHY" if rate >= 97 else "🟡 DEGRADED" if rate >= 90 else "🔴 CRITICAL"
+# Determine Health Color
+health = "CRITICAL" if rate < 90 else "DEGRADED" if rate < 97 else "HEALTHY"
+health_color = "#ff5252" if health == "CRITICAL" else "#f4b400" if health == "DEGRADED" else "#00e676"
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("System Health", health)
-c2.metric("Success Rate", f"{rate}%")
-c3.metric("Failures", failure)
-c4.metric("No Data", nodata)
+# IMPORTANT: The HTML lines below must touch the start of the line.
+# DO NOT INDENT the HTML tags.
+st.markdown(f"""
+<div class="metric-container">
+<div class="metric-box">
+<div class="metric-label">System Health</div>
+<div class="metric-value" style="color: {health_color}">{health}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">Success Rate</div>
+<div class="metric-value">{rate}%</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">Total Failures</div>
+<div class="metric-value" style="color: #ff5252">{failure}</div>
+</div>
+<div class="metric-box">
+<div class="metric-label">No Data Events</div>
+<div class="metric-value" style="color: #f4b400">{nodata}</div>
+</div>
+</div>
+""", unsafe_allow_html=True)
 
-# =========================================================
+st.divider()
+
+
+# =====================================================
 # TABS
-# =========================================================
-tab_status, tab_alerts, tab_trends, tab_tech, tab_report = st.tabs(
-    ["⚡ Live Status", "🚨 Alerts", "📈 Trends", "🔧 Tech", "📄 Report"]
-)
+# =====================================================
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "⚡ Live Status",
+    "🚨 Alerts",
+    "📈 Trends",
+    "🔧 Tech",
+    "📊 Business Impact",
+    "📄 Report"
+])
 
-# =========================================================
-# TAB 1 — STATUS CARDS
-# =========================================================
-with tab_status:
-    summary = df.groupby("apiName")["Status"].value_counts().unstack(fill_value=0)
-    summary["Total"] = summary.sum(axis=1)
-    summary["Rate"] = (summary.get("Success", 0) / summary["Total"] * 100).round(1)
-    summary = summary.sort_values("Rate")
+def api_card(api, row):
+    dot = "green" if row["Success_Rate"] >= 97 else "yellow" if row["Success_Rate"] >= 90 else "red"
+    loss = int(row["No Data"] * 0.6)
+
+    # IMPORTANT: The HTML below must be flush-left (no spaces at start of lines)
+    # otherwise Streamlit treats it as a code block.
+    html = f"""
+<div class="api-card">
+<div class="dot {dot}"></div>
+<div>
+<div class="api-title">{api.upper()}</div>
+<div class="api-metric">{int(row["Total"])}</div>
+<div class="api-sub">Total Requests</div>
+</div>
+<div class="stats-container">
+<div class="api-row">
+<span class="success">✔ {int(row["Success"])}</span>
+<span class="failure">✖ {int(row["Failure"])}</span>
+</div>
+<div class="api-row">
+<span class="nodata">⚠ {int(row["No Data"])} Empty</span>
+<span class="rate">⚡ {row["Success_Rate"]}%</span>
+</div>
+<div class="tooltip">
+Impact: ~{loss} potential leads lost
+</div>
+</div>
+</div>
+"""
+    st.markdown(html, unsafe_allow_html=True)
+
+# =====================================================
+# LIVE STATUS
+# =====================================================
+with tab1:
+    s = df.groupby("apiName")["Status"].value_counts().unstack(fill_value=0)
+    for c in ["Success", "Failure", "No Data"]:
+        if c not in s.columns:
+            s[c] = 0
+
+    s["Total"] = s.sum(axis=1)
+    s["Success_Rate"] = (s["Success"] / s["Total"] * 100).round(1)
 
     cols = st.columns(3)
-    for i, (api, row) in enumerate(summary.iterrows()):
-        icon = "🟢" if row["Rate"] >= 97 else "🟡" if row["Rate"] >= 90 else "🔴"
+    for i, (api, row) in enumerate(s.iterrows()):
         with cols[i % 3]:
-            st.markdown(f"""
-            <div class="api-card">
-                <div class="api-header">
-                    <span class="api-title">{api}</span>
-                    <span>{icon}</span>
-                </div>
-                <div class="api-metric">{int(row["Total"])}</div>
-                <div class="api-sub">Requests</div>
-                <div class="api-footer">
-                    <span class="success">{int(row.get("Success",0))} Success</span>
-                    <span class="failure">{int(row.get("Failure",0))} Failed</span>
-                </div>
-                <div class="api-footer">
-                    <span class="rate">{row["Rate"]}% Success Rate</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            api_card(api, row)
 
-# =========================================================
-# TAB 2 — ALERTS
-# =========================================================
-with tab_alerts:
-    sla = df.groupby("apiName")["Status"].apply(lambda x: (x=="Success").mean()*100)
-    breaches = sla[sla < 90]
-
+# =====================================================
+# ALERTS
+# =====================================================
+with tab2:
+    breaches = s[s["Success_Rate"] < 90]
     if breaches.empty:
-        st.success("All APIs within SLA 🎉")
+        st.success("All APIs within SLA")
     else:
-        for api, val in breaches.items():
-            st.markdown(
-                f"<div class='alert-box'>🚨 <b>{api}</b> – {val:.1f}% success rate</div>",
-                unsafe_allow_html=True
-            )
+        st.dataframe(breaches[["Success_Rate"]])
 
-# =========================================================
-# TAB 3 — TRENDS
-# =========================================================
-with tab_trends:
-    hourly = (
-        df.set_index("createdAt")
-        .resample("h")["Status"]
-        .value_counts()
-        .unstack(fill_value=0)
-    )
-    hourly["Rate"] = hourly.get("Success",0) / hourly.sum(axis=1) * 100
-
-    fig = px.line(hourly, y="Rate", title="Hourly Success Rate (%)")
+# =====================================================
+# TRENDS
+# =====================================================
+with tab3:
+    h = df.set_index("createdAt").resample("h")["Status"].value_counts().unstack(fill_value=0)
+    h["Rate"] = h.get("Success", 0) / h.sum(axis=1) * 100
+    fig = px.line(h, y="Rate", title="Hourly Success Rate (%)")
     fig.add_hline(y=95, line_dash="dot")
     st.plotly_chart(fig, use_container_width=True)
 
-# =========================================================
-# TAB 4 — TECH
-# =========================================================
-with tab_tech:
-    failures = df[df["Status"]=="Failure"]
-    if failures.empty:
-        st.success("No failures detected")
-    else:
-        st.dataframe(
-            failures.groupby(["apiName","Failure_Reason"])
-            .size()
-            .reset_index(name="Count")
-            .sort_values("Count", ascending=False)
-            .head(15),
-            use_container_width=None
-        )
-
-# =========================================================
-# TAB 5 — AUTO PDF REPORT
-# =========================================================
-with tab_report:
-    st.subheader("📄 Executive PDF Report")
-
-    def generate_pdf():
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
-        styles = getSampleStyleSheet()
-        content = []
-
-        content.append(Paragraph("<b>API Health Executive Report</b>", styles["Title"]))
-        content.append(Spacer(1, 12))
-
-        content.append(Paragraph(f"Period: {start_date} to {end_date}", styles["Normal"]))
-        content.append(Paragraph(f"System Health: {health}", styles["Normal"]))
-        content.append(Paragraph(f"Success Rate: {rate}%", styles["Normal"]))
-        content.append(Paragraph(f"Failures: {failure}", styles["Normal"]))
-        content.append(Paragraph(f"No Data: {nodata}", styles["Normal"]))
-
-        doc.build(content)
-        buffer.seek(0)
-        return buffer
-
-    pdf = generate_pdf()
-
-    st.download_button(
-        "⬇️ Download Executive PDF",
-        data=pdf,
-        file_name="API_Executive_Report.pdf",
-        mime="application/pdf"
+# =====================================================
+# TECH — ERROR GROUPING (RESTORED)
+# =====================================================
+with tab4:
+    f = df[df["Status"] == "Failure"]
+    st.dataframe(
+        f.groupby(["apiName", "Failure_Reason"])
+         .size()
+         .reset_index(name="Count")
+         .sort_values("Count", ascending=False),
+        use_container_width=True
     )
+
+# =====================================================
+# BUSINESS IMPACT — CLEAN FUNNEL + INCIDENTS
+# =====================================================
+with tab5:
+    FUNNEL = [
+        ("mobileDetails", "Mobile Prefill"),
+        ("panDetails", "PAN"),
+        ("cibilDetails", "CIBIL"),
+        ("vehicleDetails", "Vehicle"),
+        ("idfcCreateLoanApplicationId", "Loan Creation")
+    ]
+
+    rows = []
+    base = None
+    for api, label in FUNNEL:
+        d = df[df["apiName"] == api]
+        t = len(d)
+        s_cnt = (d["Status"] == "Success").sum()
+        if base is None:
+            base = t
+        drop = round((t - s_cnt) / base * 100, 1) if base else 0
+        rows.append({
+            "Stage": label,
+            "Requests": t,
+            "Success": s_cnt,
+            "No Data": (d["Status"] == "No Data").sum(),
+            "Failure": (d["Status"] == "Failure").sum(),
+            "Drop %": drop
+        })
+
+    st.subheader("Conversion Funnel")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    st.subheader("Incident Groups")
+    st.dataframe(
+        df[df["Status"] != "Success"]
+        .groupby(["apiName", "Failure_Reason"])
+        .size()
+        .reset_index(name="Count")
+        .sort_values("Count", ascending=False),
+        use_container_width=True
+    )
+
+# =====================================================
+# REPORT
+# =====================================================
+with tab6:
+    def pdf():
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf)
+        styles = getSampleStyleSheet()
+        doc.build([
+            Paragraph("API Executive Report", styles["Title"]),
+            Paragraph(f"Success Rate: {rate}%", styles["Normal"]),
+            Paragraph(f"Failures: {failure}", styles["Normal"]),
+            Paragraph(f"No Data: {nodata}", styles["Normal"])
+        ])
+        buf.seek(0)
+        return buf
+
+    st.download_button("⬇ Download PDF", pdf(), "API_Report.pdf", "application/pdf")
