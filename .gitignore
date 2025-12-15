@@ -1,0 +1,14 @@
+# Ignore Environment Variables & Secrets
+.env
+.streamlit/secrets.toml
+
+# Ignore JSON Data Files
+*.json
+
+# Ignore Python Cache
+__pycache__/
+*.pyc
+
+# Ignore Virtual Env (if you have one)
+venv/
+.venv/
