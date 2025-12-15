@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
+load_dotenv()
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="API Command Center", page_icon="⚡", layout="wide")
