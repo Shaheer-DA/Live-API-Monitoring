@@ -60,29 +60,45 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. LOAD DATA ---
-load_dotenv()
-@st.cache_data(ttl=5)
+# --- IMPROVED DATABASE CONNECTION ---
+@st.cache_data(ttl=5) 
 def load_data():
-    # Fetch variables securely
-    db_host = os.getenv("DB_HOST")
-    db_user = os.getenv("DB_USER")
-    db_pass = os.getenv("DB_PASS")
-    db_name = os.getenv("DB_NAME")
-    
-    # Construct connection string
-    db_connection_str = f"mysql+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}"
-    
-    db_connection = create_engine(db_connection_str)
+    # 1. Try fetching from Streamlit Secrets (Cloud)
+    #    (This works even if you didn't add the [env] header!)
+    try:
+        db_host = st.secrets["DB_HOST"]
+        db_user = st.secrets["DB_USER"]
+        db_pass = st.secrets["DB_PASS"]
+        db_name = st.secrets["DB_NAME"]
+    except:
+        # 2. If that fails, try local .env file (Localhost)
+        db_host = os.getenv("DB_HOST")
+        db_user = os.getenv("DB_USER")
+        db_pass = os.getenv("DB_PASS")
+        db_name = os.getenv("DB_NAME")
+
+    # Safety Check
+    if not db_host:
+        st.error("❌ Database config not found! Please check Secrets or .env file.")
+        return pd.DataFrame()
+
+    # Create Connection
+    connection_string = f"mysql+pymysql://{db_user}:{db_pass}@{db_host}/{db_name}"
+    engine = create_engine(connection_string)
     
     query = "SELECT * FROM cpl_api_logs ORDER BY createdAt DESC"
-    with db_connection.connect() as conn:
-        df = pd.read_sql(query, conn)
     
-    # Ensure date column is strictly datetime
-    df['createdAt'] = pd.to_datetime(df['createdAt'])
-    return df
-
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(query, conn)
+        
+        if not df.empty:
+            df['createdAt'] = pd.to_datetime(df['createdAt'])
+        return df
+        
+    except Exception as e:
+        st.error(f"🚨 Connection Failed: {e}")
+        return pd.DataFrame()
 # --- 2. PROCESSING LOGIC ---
 def process_data(df):
     # We apply the logic to create a new 'Status' column for easier filtering
@@ -233,7 +249,7 @@ try:
     summary_table = summary_table[['Total Hits', 'Success', 'Failure', 'No Data', 'Success %']]
     
     # Display the table
-    st.dataframe(summary_table, use_container_width=True)
+    st.dataframe(summary_table, use_container_width=None)
 
 except Exception as e:
     st.error(f"Waiting for data or connection error: {e}")
