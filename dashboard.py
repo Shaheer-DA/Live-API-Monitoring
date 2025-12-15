@@ -97,7 +97,7 @@ def load_data():
         return df
         
     except Exception as e:
-        st.error(f"🚨 Connection Failed: {e}")
+        st.error(f"🚨 Connection Failed: {e}")  
         return pd.DataFrame()
 # --- 2. PROCESSING LOGIC ---
 def process_data(df):
