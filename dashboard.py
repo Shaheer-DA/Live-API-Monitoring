@@ -19,122 +19,88 @@ st.set_page_config(
 )
 
 # =====================================================
-# GLOBAL CSS (CARDS + METRICS + LAYOUT)
+# GLOBAL CSS (KPI CARDS & LAYOUT)
 # =====================================================
 st.markdown("""
 <style>
-/* Adjust main container spacing */
-.block-container { padding-top: 1.2rem; }
+/* Add breathing room at the top */
+.block-container { 
+    padding-top: 1rem; 
+    padding-bottom: 2rem;
+}
 
-/* --- METRIC HEADER STYLES --- */
+/* --- KPI METRIC CARDS --- */
 .metric-container {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr); /* 4 Equal Columns */
     gap: 15px;
-    margin-bottom: 24px;
+    margin-bottom: 30px;
 }
 
 .metric-box {
     background: #0f0f0f;
-    border-radius: 12px;
-    padding: 20px;
-    flex: 1; /* Ensures equal width */
-    text-align: center;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     border: 1px solid #222;
+    border-radius: 12px;
+    padding: 20px 10px; /* Vertical padding, Horizontal padding */
+    text-align: center;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    
+    /* Center content vertically and horizontally */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 110px; /* Force consistent height */
+    transition: transform 0.2s ease;
+}
+
+.metric-box:hover {
+    transform: translateY(-3px); /* Subtle hover effect */
+    border-color: #444;
 }
 
 .metric-label {
     color: #888;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 8px;
+    font-size: 11px;
     font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    margin-bottom: 8px;
 }
 
 .metric-value {
-    font-size: 32px;
-    font-weight: 700;
+    font-size: 28px; /* Slightly smaller to fit better */
+    font-weight: 800;
     color: white;
+    line-height: 1.1;
 }
 
-/* --- API CARD STYLES --- */
+/* --- API DETAIL CARDS (Bottom Section) --- */
 .api-card {
     background: #0f0f0f;
     border-radius: 14px;
     padding: 20px;
     margin-bottom: 16px;
-    min-height: 220px; /* Allows card to expand for content */
+    min-height: 220px;
     box-shadow: 0 6px 18px rgba(0,0,0,.35);
     position: relative;
-    display: flex;       /* Flexbox for layout */
+    display: flex;
     flex-direction: column;
     justify-content: space-between;
 }
 
-.dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    position: absolute;
-    top: 20px;
-    right: 20px;
-}
-
-.green { background: #00c853; }
-.yellow { background: #f4b400; }
-.red { background: #ff5252; }
-
-.api-title {
-    color: #aaa;
-    font-size: 13px;
-    font-weight: 600;
-    text-transform: uppercase;
-    margin-bottom: 4px;
-}
-
-.api-metric {
-    font-size: 38px;
-    font-weight: 700;
-    color: white;
-    line-height: 1;
-    margin-bottom: 2px;
-}
-
-.api-sub { 
-    color: #777; 
-    font-size: 12px; 
-    margin-bottom: 12px;
-}
-
-.stats-container {
-    margin-top: auto; /* Pushes stats to bottom */
-}
-
-.api-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 13px;
-    margin-bottom: 6px;
-}
-
-.success { color: #00e676; }
-.failure { color: #ff5252; }
-.nodata { color: #f4b400; }
-.rate { color: #64b5f6; }
-
-.tooltip {
-    font-size: 11px;
-    color: #888;
-    background: #1a1a1a;
-    padding: 6px 10px;
-    border-radius: 6px;
-    margin-top: 8px;
-    text-align: center;
-    border: 1px solid #333;
-}
+/* ... (Keep existing styles for .dot, .success, .failure, etc.) ... */
+.dot { width: 10px; height: 10px; border-radius: 50%; position: absolute; top: 20px; right: 20px; }
+.green { background: #00c853; } .yellow { background: #f4b400; } .red { background: #ff5252; }
+.api-title { color: #aaa; font-size: 13px; font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
+.api-metric { font-size: 38px; font-weight: 700; color: white; line-height: 1; margin-bottom: 2px; }
+.api-sub { color: #777; font-size: 12px; margin-bottom: 12px; }
+.stats-container { margin-top: auto; }
+.api-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+.success { color: #00e676; } .failure { color: #ff5252; } .nodata { color: #f4b400; } .rate { color: #64b5f6; }
+.tooltip { font-size: 11px; color: #888; background: #1a1a1a; padding: 6px 10px; border-radius: 6px; margin-top: 8px; text-align: center; border: 1px solid #333; }
 </style>
-""", unsafe_allow_html=True)      
+""", unsafe_allow_html=True)  
 
 # =====================================================
 # LOAD DATA
@@ -215,7 +181,7 @@ with st.sidebar:
     ]
 
 # =====================================================
-# EXEC SUMMARY (FIXED: HTML FLUSH LEFT)
+# EXEC SUMMARY (FIXED: PROPER KPI CARDS)
 # =====================================================
 total = len(df)
 success = (df["Status"] == "Success").sum()
@@ -227,13 +193,12 @@ rate = round(success / total * 100, 1) if total else 0
 health = "CRITICAL" if rate < 90 else "DEGRADED" if rate < 97 else "HEALTHY"
 health_color = "#ff5252" if health == "CRITICAL" else "#f4b400" if health == "DEGRADED" else "#00e676"
 
-# IMPORTANT: The HTML lines below must touch the start of the line.
-# DO NOT INDENT the HTML tags.
+# RENDER HTML (Must be flush left to avoid code blocks)
 st.markdown(f"""
 <div class="metric-container">
 <div class="metric-box">
 <div class="metric-label">System Health</div>
-<div class="metric-value" style="color: {health_color}">{health}</div>
+<div class="metric-value" style="color: {health_color}; text-shadow: 0 0 10px {health_color}44;">{health}</div>
 </div>
 <div class="metric-box">
 <div class="metric-label">Success Rate</div>
